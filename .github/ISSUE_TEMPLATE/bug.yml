@@ -1,0 +1,60 @@
+name: Bug report
+description: Something is broken
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fill in the four diagnostics below — they answer most issues immediately.
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Output of `ollama list` for the model you use (e.g. lantern-qwen).
+      placeholder: lantern-qwen
+    validations:
+      required: true
+  - type: textarea
+    id: ollama_ps
+    attributes:
+      label: "`ollama ps` output"
+      description: Run this right after a slow or failed query.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: telemetry
+    attributes:
+      label: Telemetry numbers
+      description: If Settings → Advanced → Show timing details is on, paste the bar numbers (first word, search, etc.). Otherwise say "n/a".
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+    validations:
+      required: true

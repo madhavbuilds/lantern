@@ -1,0 +1,13 @@
+{
+  "name": "lantern",
+  "private": true,
+  "scripts": {
+    "start": "tauri dev",
+    "desktop": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0"
+  }
+}

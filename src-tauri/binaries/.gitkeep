@@ -1,0 +1,2 @@
+# Sidecar binaries are platform-specific; build scripts place them here.
+# A stub is created locally for `tauri dev` (debug still runs python3).

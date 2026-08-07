@@ -1,0 +1,35 @@
+[project]
+name = "lantern"
+version = "0.1.0"
+description = "Local answer engine — SearXNG + your model, no API keys"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+  "frontend",
+  "node_modules",
+  "src-tauri",
+  "ui/assets",
+  "dist",
+  "build",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+  "E501",  # line length handled by formatter / comments
+  "B008",  # FastAPI Depends() in defaults is normal
+  "SIM105",  # try/except pass is clearer for optional probes
+  "SIM117",  # nested with is fine for TestClient.stream
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

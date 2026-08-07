@@ -1,0 +1,52 @@
+# SearXNG config for Lantern.
+# Copy to settings.yml and replace secret_key before first run:
+#   cp searxng/settings.example.yml searxng/settings.yml
+#   openssl rand -hex 32   # paste into secret_key below
+
+use_default_settings: true
+
+server:
+  # Any random string. Generate one: openssl rand -hex 32
+  secret_key: "CHANGE_ME_openssl_rand_hex_32"
+  # Off because only your own machine talks to this instance.
+  limiter: false
+  image_proxy: false
+
+search:
+  # THE line that matters. SearXNG ships with json disabled and returns
+  # empty results with no error if you forget it.
+  formats:
+    - html
+    - json
+  autocomplete: ""
+  default_lang: "en"
+
+# Default 3s is too tight from inside Docker on flaky networks.
+outgoing:
+  request_timeout: 8.0
+
+engines:
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+  - name: google
+    engine: google
+    shortcut: go
+    disabled: false
+  # These burn the timeout budget and CAPTCHA often — leave off for local use.
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    disabled: true
+  - name: google cse
+    engine: google_cse
+    disabled: true

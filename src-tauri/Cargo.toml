@@ -1,0 +1,23 @@
+[package]
+name = "lantern"
+version = "1.0.0"
+description = "Local answer engine — SearXNG + your own model + MCP"
+edition = "2021"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+# Small binary, the Tauri way.
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

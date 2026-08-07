@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://TODO_REPLACE_WITH_SECURITY_POLICY_OR_EMAIL
+    about: Do not file public issues for vulnerabilities — see SECURITY.md

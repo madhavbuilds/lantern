@@ -1,0 +1,62 @@
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.spec
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+# Sidecar binaries are machine-local build outputs — never commit them.
+# Keep the empty placeholder so the directory exists in a fresh clone.
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
+# ---------------------------------------------------------------------------
+# Lantern runtime / personal files
+# ---------------------------------------------------------------------------
+# These are created on the developer's machine. Committing them leaks
+# conversations, absolute paths, or secrets. Ship only the *.example.* copies.
+#
+# *.db / chats.db     — real chat history (unencrypted)
+# mcp.json            — user MCP commands + local paths (use mcp.example.json)
+# traces.jsonl        — debug traces of queries
+# .env                — secrets / overrides
+# searxng/settings.yml — contains secret_key (use settings.example.yml)
+# SPECS.md            — often contains one machine's hardware fingerprint
+# ---------------------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+chats.db
+mcp.json
+!mcp.example.json
+traces.jsonl
+.env
+searxng/settings.yml
+!searxng/settings.example.yml
+SPECS.md
+!SPECS.example.md

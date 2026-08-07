@@ -1,0 +1,29 @@
+{
+  "_comment": "Copy entries into mcp.json. Same format as Claude Desktop, so any MCP server's README config works here. All of these are free and run locally.",
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\YOU\\Documents"]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "sqlite": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "C:\\data\\mydb.sqlite"]
+    },
+    "time": {
+      "command": "uvx",
+      "args": ["mcp-server-time"]
+    },
+    "playwright": {
+      "_comment": "Browsing toggle. Deep mode only — first run downloads Chromium.",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "init_timeout": 180,
+      "call_timeout": 45,
+      "deep_only": true
+    }
+  }
+}

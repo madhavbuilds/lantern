@@ -1,0 +1,14 @@
+# Lantern's answer model.
+# Bake a larger context window — Ollama's OpenAI-compatible endpoint can't
+# set num_ctx per request. Leave the stock qwen3 chat template alone: the
+# model "thinks" first, then answers. server.py budgets enough tokens for both.
+#
+# Use 4b when `ollama ps` shows any CPU split on 8b — partial offload is
+# 5–10x slower and often never reaches the visible answer. Step up only when
+# PROCESSOR is 100% GPU.
+
+FROM qwen3:4b
+
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9

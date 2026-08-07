@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Lantern main window: allowed to run the bundled server sidecar.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        { "name": "binaries/lantern-server", "sidecar": true, "args": ["--port", { "validator": "^[0-9]{4,5}$" }] }
+      ]
+    }
+  ]
+}
