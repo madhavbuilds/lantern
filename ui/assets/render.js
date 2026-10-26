@@ -25,8 +25,8 @@ function cite(html, sources) {
     if (!s) return m;
     const href = safeHttpUrl(s.url);
     return href
-      ? `<sup class="cite"><a href="${escapeHtml(href)}" target="_blank" rel="noopener">[${n}]</a></sup>`
-      : `<sup class="cite">[${n}]</sup>`;
+      ? `<a class="cite" data-n="${n}" href="${escapeHtml(href)}" target="_blank" rel="noopener">${n}</a>`
+      : `<span class="cite" data-n="${n}">${n}</span>`;
   });
 }
 
@@ -36,6 +36,13 @@ function inlineFmt(text, sources) {
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
+  // [label](url) — text is already escaped; the href goes through the whitelist.
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, url) => {
+    const href = safeHttpUrl(url.replace(/&amp;/g, "&"));
+    return href
+      ? `<a class="md-link" href="${escapeHtml(href)}" target="_blank" rel="noopener">${label}</a>`
+      : label;
+  });
   return cite(s, sources);
 }
 
@@ -257,25 +264,25 @@ export function renderMarkdown(text, sources) {
     }
 
     // headings
-    const h = line.match(/^(#{2,3})\s+(.+)$/);
+    const h = line.match(/^(#{1,4})\s+(.+)$/);
     if (h) {
       flushPara();
-      const lvl = h[1].length;
+      const lvl = Math.min(4, Math.max(2, h[1].length));
       out.push(`<h${lvl} class="md-h">${inlineFmt(h[2], sources)}</h${lvl}>`);
       i++;
       continue;
     }
 
     // lists
-    const ul = line.match(/^[-*]\s+(.+)$/);
-    const ol = line.match(/^(\d+)\.\s+(.+)$/);
+    const ul = line.match(/^\s*[-*•]\s+(.+)$/);
+    const ol = line.match(/^\s*(\d+)[.)]\s+(.+)$/);
     if (ul || ol) {
       flushPara();
       const ordered = !!ol;
       const items = [];
       while (i < lines.length) {
-        const u = lines[i].match(/^[-*]\s+(.+)$/);
-        const o = lines[i].match(/^\d+\.\s+(.+)$/);
+        const u = lines[i].match(/^\s*[-*•]\s+(.+)$/);
+        const o = lines[i].match(/^\s*\d+[.)]\s+(.+)$/);
         if (ordered ? o : u) {
           items.push(ordered ? o[1] : u[1]);
           i++;
@@ -285,6 +292,24 @@ export function renderMarkdown(text, sources) {
       out.push(
         `<${tag} class="md-list">${items.map((it) => `<li>${inlineFmt(it, sources)}</li>`).join("")}</${tag}>`
       );
+      continue;
+    }
+
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      flushPara();
+      out.push('<hr class="md-hr">');
+      i++;
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      flushPara();
+      const buf = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        buf.push(lines[i].replace(/^>\s?/, ""));
+        i++;
+      }
+      out.push(`<blockquote class="md-quote">${inlineFmt(buf.join(" "), sources)}</blockquote>`);
       continue;
     }
 

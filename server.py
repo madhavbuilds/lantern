@@ -15,6 +15,7 @@ at Ollama today and mlx_lm.server later without touching the code.
 """
 
 import asyncio
+import html
 import ipaddress
 import json
 import logging
@@ -24,6 +25,7 @@ import socket
 import time
 import uuid
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
@@ -68,7 +70,31 @@ BUDGET = {"fast": 1400, "deep": 3600}
 # reasoning channel before any answer token — that burns 100–400 tokens first.
 # Budget must cover thinking + the visible answer, or content stays empty and
 # the UI looks broken. Visible answers are still kept short by the system prompt.
-MAX_ANSWER_TOKENS = 900
+MAX_ANSWER_TOKENS = 1600
+
+# Hybrid models (original qwen3) honor "/no_think"; thinking-only models
+# (qwen3 2507) don't, and read the suffix as a typo. Opt in when it helps.
+NO_THINK_SUFFIX = os.getenv("LANTERN_NO_THINK", "0") == "1"
+
+# Focus narrows where search looks. SearXNG gets real categories; site-scoped
+# focuses ride on the query so the DuckDuckGo fallback honors them too.
+FOCUS = {
+    "web": {"categories": None, "suffix": ""},
+    "news": {"categories": "news", "suffix": ""},
+    "academic": {"categories": "science", "suffix": ""},
+    "code": {"categories": "it", "suffix": ""},
+    "reddit": {"categories": None, "suffix": " site:reddit.com"},
+}
+_focus: ContextVar[str] = ContextVar("lantern_focus", default="web")
+
+# Thinking budget (≈tokens) per intent. Thinking-only models can spend 500+
+# tokens reasoning before the first visible word — 30-40s on an 8 GB M2.
+# Past the budget we close the thought ourselves and prefill the answer
+# ("budget forcing"); Ollama's prefix cache makes the second prefill cheap.
+# LANTERN_THINK_BUDGET=0 disables the cap.
+THINK_BUDGET = {"answer": 60, "search": 180, "compute": 400, "reason": 700}
+THINK_BUDGET_ON = os.getenv("LANTERN_THINK_BUDGET", "1") != "0"
+CHARS_PER_TOKEN = 4
 
 # How many results we even consider.
 N_RESULTS = {"fast": 8, "deep": 6}
@@ -281,7 +307,7 @@ def humanize_error(exc: BaseException, *, where: str = "") -> dict:
     if ("model" in low and ("not found" in low or "does not exist" in low or "404" in low)) or (
         getattr(exc, "response", None) is not None
         and getattr(exc.response, "status_code", None) == 404
-        and "model" in blob
+        and ("model" in blob or where == "llm")
     ):
         return {
             "text": f"The model '{MODEL}' isn't installed.",
@@ -633,12 +659,13 @@ def enrich_system(base: str, *, about: str, project_instructions: str) -> str:
 
 async def search(client: httpx.AsyncClient, query: str, n: int) -> list[Source]:
     """No LLM query-rewrite step. It costs a full round trip and rarely earns it."""
+    focus = FOCUS.get(_focus.get(), FOCUS["web"])
+    query = query + focus["suffix"]
+    params = {"q": query, "format": "json", "safesearch": "0"}
+    if focus["categories"]:
+        params["categories"] = focus["categories"]
     try:
-        r = await client.get(
-            f"{SEARXNG}/search",
-            params={"q": query, "format": "json", "safesearch": "0"},
-            timeout=12.0,
-        )
+        r = await client.get(f"{SEARXNG}/search", params=params, timeout=12.0)
         r.raise_for_status()
         raw = r.json().get("results", [])
     except Exception as e:
@@ -662,9 +689,9 @@ async def search(client: httpx.AsyncClient, query: str, n: int) -> list[Source]:
         out.append(
             Source(
                 n=len(out) + 1,
-                title=item.get("title", "").strip(),
+                title=html.unescape(item.get("title") or "").strip(),
                 url=url,
-                snippet=(item.get("content") or "").strip(),
+                snippet=html.unescape(item.get("content") or "").strip(),
             )
         )
         if len(out) == n:
@@ -856,14 +883,18 @@ async def stream_llm(
     think: bool = False,
     max_tokens: int | None = None,
     cancel: asyncio.Event | None = None,
+    think_budget: int | None = None,
 ):
     """
     One streaming completion. Yields ("token", text), ("thinking", text),
     and optionally a final ("tool_calls", [...]) after [DONE].
     Stops early when cancel is set and closes the upstream httpx stream.
+
+    With think_budget, reasoning that runs past ~think_budget tokens before
+    any visible token is cut off and the answer is forced (see THINK_BUDGET).
     """
     msgs = [dict(m) for m in messages]
-    if not think and msgs:
+    if NO_THINK_SUFFIX and not think and msgs:
         last = msgs[-1]
         if (
             last.get("role") == "user"
@@ -885,6 +916,10 @@ async def stream_llm(
     calls: dict[int, dict] = {}
     mode = "out"
     carry = ""
+    thought = ""
+    answered = False
+    over_budget = False
+    budget_chars = (think_budget or 0) * CHARS_PER_TOKEN
 
     def _drain_content(chunk: str):
         nonlocal mode, carry
@@ -930,8 +965,10 @@ async def stream_llm(
         f"{LLM_BASE}/chat/completions",
         json=payload,
         headers={"Authorization": f"Bearer {LLM_KEY}"},
+        timeout=httpx.Timeout(180.0, connect=5.0),
     )
-    r = await client.send(req, stream=True, timeout=180.0)
+    r = await client.send(req, stream=True)
+    r.raise_for_status()
     try:
         async for line in r.aiter_lines():
             if cancel and cancel.is_set():
@@ -948,13 +985,23 @@ async def stream_llm(
                 continue
             for key in ("reasoning_content", "reasoning", "thinking"):
                 if piece := delta.get(key):
+                    thought += piece
                     yield ("thinking", piece)
             if piece := delta.get("content"):
                 if think or "<think>" in piece.lower() or mode == "think" or carry:
                     for kind, val in _drain_content(piece):
+                        if kind == "thinking":
+                            thought += val
+                        elif val.strip():
+                            answered = True
                         yield (kind, val)
                 else:
+                    if piece.strip():
+                        answered = True
                     yield ("token", piece)
+            if budget_chars and not answered and not calls and len(thought) > budget_chars:
+                over_budget = True
+                break
             for tc in delta.get("tool_calls") or []:
                 i = tc.get("index", 0)
                 slot = calls.setdefault(i, {"id": "", "name": "", "arguments": ""})
@@ -969,6 +1016,20 @@ async def stream_llm(
         await r.aclose()
 
     if cancel and cancel.is_set():
+        return
+    if over_budget:
+        # Close the thought and make the model answer. No tools on this leg.
+        forced = msgs + [
+            {
+                "role": "assistant",
+                "content": f"<think>\n{thought.strip()}\n\nI have enough to answer now.\n</think>\n\n",
+            }
+        ]
+        async for kind, val in stream_llm(
+            client, forced, None, think=think, max_tokens=max_tokens, cancel=cancel
+        ):
+            if kind == "token":
+                yield (kind, val)
         return
     if calls:
         yield ("tool_calls", [calls[i] for i in sorted(calls)])
@@ -986,6 +1047,7 @@ async def answer_with_tools(
     think: bool = False,
     cancel: asyncio.Event | None = None,
     continue_prefix: str | None = None,
+    think_budget: int | None = None,
 ):
     """
     The generation loop. Round 0 streams normally; if the model requests
@@ -1016,6 +1078,7 @@ async def answer_with_tools(
             offer,
             think=think and round_n == 0,
             cancel=cancel,
+            think_budget=think_budget,
         ):
             if cancel and cancel.is_set():
                 return
@@ -1096,6 +1159,7 @@ def _sources_payload(sources: list[Source]) -> list[dict]:
                 "title": s.title,
                 "url": url,
                 "host": host,
+                "snippet": clip_words(s.snippet, 40),
                 "read": bool(s.body),
             }
         )
@@ -1155,14 +1219,20 @@ async def ask(
     continue_prefix: str | None = None,
     retry: int = 0,
     cont: int = 0,
+    focus: str = "web",
 ):
     mode = mode if mode in BUDGET else "fast"
+    focus = focus if focus in FOCUS else "web"
+    # A narrowed focus is an explicit request to search.
+    if focus != "web" and not force:
+        force = "search"
     force = force if force in ("search", "chat", "answer", "compute", "reason") else None
     request_id = uuid.uuid4().hex
     cancel = asyncio.Event()
     _active_asks[request_id] = {"cancel": cancel}
 
     async def gen():
+        _focus.set(focus)
         t0 = time.perf_counter()
         marks = {}
         side: asyncio.Queue = asyncio.Queue()
@@ -1338,6 +1408,7 @@ async def ask(
                             think=think_flag,
                             cancel=cancel,
                             continue_prefix=prefix,
+                            think_budget=THINK_BUDGET.get(intent) if THINK_BUDGET_ON else None,
                         ):
                             if cancel.is_set():
                                 stopped = True
@@ -1464,6 +1535,7 @@ async def ask(
                             "context_tokens": ctx_tokens,
                             "sources_read": sum(1 for s in sources if s.body),
                             "mode": exec_depth if intent == "search" else mode,
+                            "focus": focus,
                             "route": intent,
                             "intent": intent,
                             "format": active_plan.format,
@@ -1640,6 +1712,60 @@ async def data_export():
 async def data_wipe():
     await asyncio.to_thread(chats.wipe_all)
     return {"ok": True}
+
+
+@app.get("/api/health")
+async def health():
+    """Is each local dependency up? Drives the status dots and first-run help."""
+
+    async def check_model(client: httpx.AsyncClient) -> dict:
+        try:
+            r = await client.get(
+                f"{LLM_BASE}/models", headers={"Authorization": f"Bearer {LLM_KEY}"}, timeout=2.5
+            )
+            r.raise_for_status()
+            names = {m.get("id", "") for m in r.json().get("data", [])}
+        except Exception:
+            return {
+                "ok": False,
+                "name": MODEL,
+                "text": "Ollama isn't running.",
+                "fix": "ollama serve",
+            }
+        if MODEL not in names and f"{MODEL}:latest" not in names:
+            return {
+                "ok": False,
+                "name": MODEL,
+                "text": f"The model '{MODEL}' isn't installed.",
+                "fix": f"ollama create {MODEL} -f Modelfile",
+            }
+        return {"ok": True, "name": MODEL}
+
+    async def check_search(client: httpx.AsyncClient) -> dict:
+        try:
+            r = await client.get(f"{SEARXNG}/healthz", timeout=2.0)
+            if r.status_code == 200:
+                return {"ok": True, "provider": "searxng"}
+        except Exception:
+            pass
+        # Still answers via the DuckDuckGo fallback — degraded, not down.
+        return {
+            "ok": True,
+            "degraded": True,
+            "provider": "duckduckgo",
+            "text": "SearXNG is off — using DuckDuckGo as a fallback.",
+            "fix": "docker compose up -d",
+        }
+
+    async with httpx.AsyncClient() as client:
+        model, search_ = await asyncio.gather(check_model(client), check_search(client))
+    return {"model": model, "search": search_, "focus": list(FOCUS)}
+
+
+@app.get("/api/history/search")
+async def history_search(q: str = "", limit: int = 20):
+    """Full-text search over every saved question and answer."""
+    return await asyncio.to_thread(chats.search_messages, q, max(1, min(limit, 50)))
 
 
 @app.get("/api/mcp")

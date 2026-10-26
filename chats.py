@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -113,6 +114,50 @@ def init_db() -> None:
             conn.execute("ALTER TABLE messages ADD COLUMN route TEXT")
         if "stopped" not in cols_m:
             conn.execute("ALTER TABLE messages ADD COLUMN stopped INTEGER NOT NULL DEFAULT 0")
+        _init_fts(conn)
+
+
+_HAS_FTS: bool | None = None
+
+
+def _init_fts(conn: sqlite3.Connection) -> None:
+    """External-content FTS5 index over messages, kept in sync by triggers.
+
+    Cascading chat deletes fire the delete trigger too. Python builds without
+    FTS5 fall back to LIKE in search_messages.
+    """
+    global _HAS_FTS
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+    ).fetchone()
+    if exists:
+        _HAS_FTS = True
+        return
+    try:
+        conn.executescript(
+            """
+            CREATE VIRTUAL TABLE messages_fts USING fts5(
+              content, content='messages', content_rowid='id',
+              tokenize='porter unicode61'
+            );
+            CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+              INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+            END;
+            CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+              INSERT INTO messages_fts(messages_fts, rowid, content)
+                VALUES ('delete', old.id, old.content);
+            END;
+            CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+              INSERT INTO messages_fts(messages_fts, rowid, content)
+                VALUES ('delete', old.id, old.content);
+              INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+            END;
+            INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');
+            """
+        )
+        _HAS_FTS = True
+    except sqlite3.OperationalError:
+        _HAS_FTS = False
 
 
 def est_tokens(text: str) -> int:
@@ -242,6 +287,56 @@ def get_messages(chat_id: str) -> list[dict]:
                 "stopped": bool(r["stopped"]),
             }
         )
+    return out
+
+
+def search_messages(query: str, limit: int = 20) -> list[dict]:
+    """Ranked full-text hits across all chats; one row per chat, best hit first.
+
+    Snippets mark matches with \x02 / \x03 so the UI can escape the text
+    first and only then turn the markers into <mark>.
+    """
+    init_db()
+    terms = re.findall(r"\w+", query or "", re.UNICODE)[:8]
+    if not terms:
+        return []
+    with _db() as conn:
+        if _HAS_FTS:
+            match = " ".join(f'"{t}"*' for t in terms)
+            rows = conn.execute(
+                "SELECT m.chat_id, m.role, m.created_at, c.title, "
+                "snippet(messages_fts, 0, char(2), char(3), '…', 14) AS snip "
+                "FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
+                "JOIN chats c ON c.id = m.chat_id "
+                "WHERE messages_fts MATCH ? ORDER BY bm25(messages_fts) LIMIT ?",
+                (match, limit * 4),
+            ).fetchall()
+        else:
+            like = f"%{terms[0]}%"
+            rows = conn.execute(
+                "SELECT m.chat_id, m.role, m.created_at, c.title, "
+                "substr(m.content, 1, 160) AS snip FROM messages m "
+                "JOIN chats c ON c.id = m.chat_id WHERE m.content LIKE ? "
+                "ORDER BY m.id DESC LIMIT ?",
+                (like, limit * 4),
+            ).fetchall()
+    seen: set[str] = set()
+    out = []
+    for r in rows:
+        if r["chat_id"] in seen:
+            continue
+        seen.add(r["chat_id"])
+        out.append(
+            {
+                "chat_id": r["chat_id"],
+                "title": r["title"],
+                "role": r["role"],
+                "snippet": " ".join((r["snip"] or "").split()),
+                "created_at": r["created_at"],
+            }
+        )
+        if len(out) >= limit:
+            break
     return out
 
 
@@ -525,6 +620,7 @@ def wipe_all() -> None:
     with _db() as conn:
         conn.executescript(
             """
+            DROP TABLE IF EXISTS messages_fts;
             DROP TABLE IF EXISTS messages;
             DROP TABLE IF EXISTS facts;
             DROP TABLE IF EXISTS chats;

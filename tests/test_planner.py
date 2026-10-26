@@ -88,7 +88,8 @@ def test_deep_only_tool_dropped_when_fast():
     assert "playwright__browser_navigate" not in p.tools
 
 
-def test_planner_timeout_returns_fallback():
+def test_planner_timeout_returns_fallback(monkeypatch):
+    monkeypatch.setenv("LANTERN_PLANNER", "llm")
     client = AsyncMock()
     client.post = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
 
@@ -109,7 +110,8 @@ def test_planner_timeout_returns_fallback():
     assert "timeout" in p.why
 
 
-def test_planner_http_error_fallback():
+def test_planner_http_error_fallback(monkeypatch):
+    monkeypatch.setenv("LANTERN_PLANNER", "llm")
     client = AsyncMock()
     client.post = AsyncMock(side_effect=httpx.ConnectError("down"))
 

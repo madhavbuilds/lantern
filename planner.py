@@ -107,6 +107,67 @@ class Plan:
         return d
 
 
+_ARITH = re.compile(r"^[\s\d().,+\-*/^%x×÷=?]+$")
+_COMPUTE = re.compile(
+    r"\b(calculate|compute|convert|how many (days|hours|minutes|weeks|seconds) "
+    r"(between|until|since|in)|what is \d[\d\s.,]*\s*(\+|-|\*|/|x|×|÷|%|percent|times|"
+    r"plus|minus|divided)|\d+\s*% of \d+|square root|factorial|prime numbers)\b",
+    re.I,
+)
+_WRITE = re.compile(
+    r"^(write|draft|compose|rewrite|rephrase|proofread|translate|brainstorm|"
+    r"summari[sz]e (this|the following|my)|make (this|it) (shorter|longer|better)|"
+    r"fix (this|my)|debug|refactor|generate (a|an|some)|create (a|an) "
+    r"(poem|story|email|essay|plan|outline|function|script))\b",
+    re.I,
+)
+_CODE_ASK = re.compile(
+    r"\b(write|give me|show me|generate)\b.*\b(function|script|regex|sql|query|"
+    r"snippet|class|program|code)\b",
+    re.I,
+)
+_STEPS = re.compile(r"^(how (do|can|to|should) (i|you|we)|how to|steps to|guide to)\b", re.I)
+_COMPARE = re.compile(r"\b(vs\.?|versus|compare|comparison|difference between)\b", re.I)
+_LIST = re.compile(r"\b(top \d+|best \d+|list of|examples of|\d+ (ways|ideas|tips))\b", re.I)
+_DEEP = re.compile(
+    r"\b(in depth|in-depth|detailed|thorough|research|deep dive|comprehensive)\b", re.I
+)
+
+
+def heuristic_plan(query: str, user_depth: str = "fast") -> Plan:
+    """Instant, deterministic routing — no model round trip.
+
+    Thinking models (qwen3 2507 and friends) reason before emitting JSON, so
+    an LLM planner either blows its time budget or truncates. Rules cover the
+    common shapes; anything ambiguous goes to search, which is always safe.
+    """
+    q = (query or "").strip()
+    depth = user_depth if user_depth in DEPTHS else "fast"
+    if _DEEP.search(q):
+        depth = "deep"
+
+    fmt = "prose"
+    if _CODE_ASK.search(q):
+        fmt = "code"
+    elif _COMPARE.search(q):
+        fmt = "table"
+    elif _STEPS.search(q):
+        fmt = "steps"
+    elif _LIST.search(q):
+        fmt = "list"
+
+    if _is_greeting(q):
+        p = Plan(intent="answer", format="prose", why="greeting")
+    elif (_ARITH.match(q) and re.search(r"\d", q)) or _COMPUTE.search(q):
+        p = Plan(intent="compute", format="prose", why="calculation")
+    elif (_WRITE.search(q) or fmt == "code") and not _RECENCY.search(q):
+        p = Plan(intent="reason", format=fmt, why="writing or reasoning task")
+    else:
+        p = Plan(intent="search", search_query=q, format=fmt, why="looked it up")
+    p.depth = depth
+    return apply_sanity(p, q)
+
+
 def fallback_plan(query: str, user_depth: str = "fast", why: str = "planner fallback") -> Plan:
     p = Plan(
         intent="search",
@@ -279,10 +340,14 @@ async def plan(
     llm_key: str = "not-needed",
 ) -> tuple[Plan, int]:
     """
-    One non-streaming classification call. Returns (Plan, plan_ms).
+    Returns (Plan, plan_ms). Default is the instant heuristic router; set
+    LANTERN_PLANNER=llm (optionally with a small non-thinking PLANNER_MODEL)
+    for one non-streaming classification call instead.
     On timeout / error / bad JSON → fallback search plan.
     """
     t0 = time.perf_counter()
+    if os.getenv("LANTERN_PLANNER", "heuristic").lower() != "llm":
+        return heuristic_plan(query, user_depth), int((time.perf_counter() - t0) * 1000)
     use_model = os.getenv("PLANNER_MODEL") or model
 
     tool_lines = []
@@ -296,7 +361,7 @@ async def plan(
     user = f"Question: {query}\n"
     if history_summary:
         user += f"History:\n{history_summary}\n"
-    user += f"Available tools:\n{tools_block}\n/no_think"
+    user += f"Available tools:\n{tools_block}"
 
     payload = {
         "model": use_model,

@@ -87,6 +87,9 @@ def test_cancel_closes_upstream_llm_stream(base_patches, monkeypatch):
         def __init__(self):
             self._closed = False
 
+        def raise_for_status(self):
+            return None
+
         async def aiter_lines(self):
             for i in range(total_lines):
                 if self._closed:
@@ -244,3 +247,19 @@ def test_client_caps_concurrent_streams_at_two():
         "Waiting for a free slot"
         in (Path(__file__).resolve().parents[1] / "ui" / "index.html").read_text()
     )
+
+
+def test_stream_llm_uses_real_httpx_send_signature():
+    """Regression: send(timeout=...) is not an httpx argument and crashed every answer."""
+    import inspect
+
+    import httpx
+
+    import server
+
+    src = inspect.getsource(server.stream_llm)
+    allowed = set(inspect.signature(httpx.AsyncClient.send).parameters)
+    call = src[src.index("client.send(") :].split(")", 1)[0]
+    for kw in ("timeout", "stream", "auth", "follow_redirects"):
+        if f"{kw}=" in call:
+            assert kw in allowed, f"httpx.AsyncClient.send has no '{kw}' argument"
