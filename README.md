@@ -11,6 +11,30 @@ with a model you run in Ollama, and keeps chat history on your machine.
 **Cost:** nothing. No API keys, no accounts, no subscription. Search and the
 model both run on hardware you control.
 
+### Highlights
+
+- **Cited answers, streamed.** Numbered source cards and inline citation pills;
+  hover a citation to preview the page it came from.
+- **Watch it work.** A live pipeline (Route → Search → Read → Think → Write)
+  with an elapsed timer, the model's reasoning streamed as it happens, and
+  tokens/sec once it's done.
+- **Thinking budget.** Reasoning models can spend 30-40s thinking before the
+  first word on a laptop. Lantern caps the thought per intent and makes the
+  model answer ("budget forcing"). On an 8 GB M2 the first word came about
+  2-3× sooner.
+- **Instant routing.** Greetings, arithmetic, writing tasks and web questions
+  are told apart with rules, not an extra model call, so no time is spent
+  before the answer starts.
+- **Focus modes.** Web, News, Academic, Code or Reddit, plus Quick and Deep
+  depth, right in the composer.
+- **Search everything you've asked.** ⌘K full-text search over every question
+  and answer, using a SQLite FTS5 index with BM25 ranking and stemming.
+- **Projects.** Group chats under shared instructions. Each chat's history
+  still stays private from the others.
+- **Self-diagnosing.** Status lights for the model and search, and a first-run
+  card with the exact command to fix whatever's missing.
+- **Export** a thread as Markdown with its references, or all data as JSON.
+
 ---
 
 ## Requirements
@@ -111,6 +135,18 @@ You want `100% GPU` (or equivalent). A CPU split means drop a model size.
 | “Search isn’t responding” | SearXNG down | `docker compose up -d` |
 | “Can’t reach Lantern’s server” | uvicorn / sidecar down | Start the server again |
 
+### Tuning
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `MODEL` | `lantern-qwen` | Ollama model name |
+| `LLM_BASE` | `http://localhost:11434/v1` | Any OpenAI-compatible endpoint |
+| `SEARXNG_URL` | `http://localhost:8080` | Falls back to DuckDuckGo when unreachable |
+| `LANTERN_THINK_BUDGET` | `1` | `0` lets the model think as long as it likes |
+| `LANTERN_PLANNER` | `heuristic` | `llm` uses a model call to route (set `PLANNER_MODEL` to a small non-thinking model) |
+| `LANTERN_NO_THINK` | `0` | `1` appends `/no_think` — only for hybrid models like original `qwen3:8b` |
+| `CHATS_DB` | `~/.config/Lantern/chats.db` | Where history lives |
+
 Local measurements (optional): run `python bench.py` and keep results in a
 private `SPECS.md` (gitignored). Do not commit machine fingerprints.
 
@@ -121,11 +157,11 @@ private `SPECS.md` (gitignored). Do not commit machine fingerprints.
 ```
 Browser / Tauri UI  →  FastAPI (server.py)  →  Ollama (chat)
                          │
-                         ├─ planner.py      short intent/format plan
+                         ├─ planner.py      instant intent/format routing
                          ├─ SearXNG         search
                          ├─ trafilatura     page text (Deep)
                          ├─ rank-bm25       pick context under BUDGET
-                         └─ chats.py        SQLite history
+                         └─ chats.py        SQLite history + FTS5 index
 ```
 
 **Design choices**
@@ -133,6 +169,9 @@ Browser / Tauri UI  →  FastAPI (server.py)  →  Ollama (chat)
 - **BUDGET** (`fast` / `deep` token-ish word caps in `server.py`) keeps
   context small so local prefill stays tolerable. Raising it without GPU
   headroom makes first token slower, not smarter.
+- **Budget forcing, not a smaller brain.** Past a per-intent thinking cap the
+  server closes the `<think>` block itself and prefills the answer turn;
+  Ollama's prefix cache keeps that second prefill cheap.
 - **BM25, not embeddings** — ranking snippets/pages for a single query does
   not need a second model or a vector DB; BM25 is local, fast, and enough.
 - **Python sidecar + Tauri shell** — search, budgets, and MCP stay in Python;
@@ -172,7 +211,7 @@ you publish a release.
 | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | Tool servers | MIT |
 | [FastAPI](https://fastapi.tiangolo.com/) / [Uvicorn](https://www.uvicorn.org/) / [httpx](https://www.python-httpx.org/) | HTTP stack | MIT / BSD-3 / BSD-3 |
 | [Tauri](https://tauri.app/) | Desktop shell | MIT / Apache-2.0 |
-| Instrument Serif, Inter, IBM Plex Mono | UI fonts (Google Fonts) | OFL-1.1 |
+| Instrument Serif, Geist, Geist Mono | UI fonts (Google Fonts) | OFL-1.1 |
 
 No AGPL code is linked into the Lantern Python package; SearXNG is an
 external service. Still credit it, and do not strip its license from any
@@ -184,4 +223,3 @@ SearXNG forks you distribute.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
 and [SECURITY.md](SECURITY.md).
-# lantern

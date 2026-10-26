@@ -1793,6 +1793,11 @@ async def index():
     return FileResponse(os.path.join(_ui_dir(), "index.html"))
 
 
+@app.get("/favicon.svg")
+async def favicon():
+    return FileResponse(os.path.join(_ui_dir(), "favicon.svg"), media_type="image/svg+xml")
+
+
 @app.get("/stream.js")
 async def stream_js():
     return FileResponse(os.path.join(_ui_dir(), "stream.js"), media_type="text/javascript")
